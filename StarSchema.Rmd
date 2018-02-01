@@ -1,5 +1,5 @@
 ---
-title: "Some crude time series analysis experiments on the Bayer StarSchema data"
+title: "Some crude time series analysis experiments with the Bayer data"
 author: "Andrew Lowe"
 date: "`r format(Sys.Date(), '%d %B %Y')`"
 output:
@@ -10,24 +10,28 @@ output:
 
 In my free time, outside of office hours, I'm studying time series analysis. It would be fun to see what we can learn from the Bayer data, which is hierarchical time series data. We won't do anything too sophisticated.
 
+**Before anyone starts freaking out, I did this while waiting for KNIME workflows to finish executing. They take a while to run, and this seemed to be a reasonable use of my time, given that my next project will probably involve a ton of time series analysis. So there was no impact on my regular duties.**
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 We're going to need this stuff:
-```{r}
+```{r message = FALSE}
 require(tidyverse)
 ```
 
 
-Read in the data:
+Read in the data -- we don't have enough RAM on this machine to read in the whole StarSchema data, so we'll just load the Golden Standard data, which will be enough to get a flavour of what might be possible:
 ```{r}
-# dat <- fread("C:/Work/Projects/Bayer/ws/Tableau/_work/output/StarSchema_CAT_PT_OVR.csv",
-#                     select = c(2, 8, 9, 36, 38, 46, 50, 54, 58, 59, 63, 197), 
+# require(data.table)
+# dat <- fread("C:/Work/Projects/Bayer/ws/Tableau/_work/output/StarSchema_CAT_PT_OVR_1000.csv",
+#                     select = c(2, 8, 9, 36, 38, 46, 50, 54, 58, 59, 63, 197),
 #                     showProgress = T)
+# names(dat)
 ```
 
-```{r}
+```{r message = FALSE}
 dat <- read_csv("C:/Work/Projects/Bayer/ws/Tableau/_work/output/GoldenStandardAddressable.csv")
 ```
 
@@ -161,7 +165,7 @@ fb.crystal.ball <- function(in.data) {
 ```
 
 Now we run this function on every PHARMA_BRAND and postdict the data for 2017:
-```{r}
+```{r message = FALSE}
 require(purrr)
 results <- dat %>% arrange(Month) %>% 
   group_by(PHARMA_BRAND, Month) %>% 
@@ -217,7 +221,7 @@ arima.crystal.ball <- function(in.data) {
 ```
 
 We run our new crystal ball function on each of the PHARMA_BRANDS:
-```{r}
+```{r message = FALSE}
 results <- dat %>% arrange(Month) %>% 
   group_by(PHARMA_BRAND, Month) %>% 
   summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
@@ -229,36 +233,4 @@ print(results)
 ```
 
 OK, so it looks like we might be able to do some useful predictive work with the data.
-
-```{r}
-knitr::knit_exit()
-```
-
-
-```{r, cache=T}
-StarSchema$IS_CATEGORY_MAPPED <- factor(StarSchema$IS_CATEGORY_MAPPED)
-StarSchema$MARKET_LEVEL <- factor(StarSchema$MARKET_LEVEL)
-StarSchema$SOURCE_CODE <- factor(StarSchema$SOURCE_CODE)
-StarSchema$Month <- factor(StarSchema$Month == "")
-StarSchema$Distribution_ChainDescription <- factor(StarSchema$Distribution_ChainDescription)
-StarSchema$Distribution_Channel_Name <- factor(StarSchema$Distribution_Channel_Name)
-```
-
-```{r, cache=T}
-table(StarSchema$IS_CATEGORY_MAPPED)/sum(table(StarSchema$IS_CATEGORY_MAPPED))*100
-table(StarSchema$MARKET_LEVEL)/sum(table(StarSchema$MARKET_LEVEL))*100
-table(StarSchema$SOURCE_CODE)/sum(table(StarSchema$SOURCE_CODE))*100
-table(StarSchema$Month)/sum(table(StarSchema$Month))*100
-table(StarSchema$Distribution_ChainDescription)/sum(table(StarSchema$Distribution_ChainDescription))*100
-table(StarSchema$Distribution_Channel_Name)/sum(table(StarSchema$Distribution_Channel_Name))*100
-```
-
-```{r, cache=T}
-pie(table(StarSchema$IS_CATEGORY_MAPPED))
-pie(table(StarSchema$MARKET_LEVEL))
-pie(table(StarSchema$SOURCE_CODE))
-pie(table(StarSchema$Month))
-pie(table(StarSchema$Distribution_ChainDescription))
-pie(table(StarSchema$Distribution_Channel_Name))
-```
 
