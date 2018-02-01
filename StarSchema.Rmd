@@ -2,7 +2,10 @@
 title: "StarSchema"
 author: "Andrew Lowe"
 date: "8 January 2018"
-output: pdf_document
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -10,98 +13,38 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 Read in the data (and drop the numeric data to save RAM):
-```{r}
+```{r, cache=T}
 require(data.table)
 
-StarSchema <- fread("C:/Work/Projects/Bayer/ws/Tableau/_work/output/StarSchema_CAT_PT_OVR.csv", 
+StarSchema <- fread("C:/Work/Projects/Bayer/ws/Tableau/_work/output/StarSchema_CAT_PT_OVR_1000.csv", 
                     select = c(2, 46, 54, 58, 59, 197), # Just these columns; we don't need the rest
                     showProgress = T)
 ```
 
-```{r}
+```{r, cache=T}
 StarSchema$IS_CATEGORY_MAPPED <- factor(StarSchema$IS_CATEGORY_MAPPED)
 StarSchema$MARKET_LEVEL <- factor(StarSchema$MARKET_LEVEL)
 StarSchema$SOURCE_CODE <- factor(StarSchema$SOURCE_CODE)
 StarSchema$Month <- factor(StarSchema$Month == "")
+StarSchema$Distribution_ChainDescription <- factor(StarSchema$Distribution_ChainDescription)
+StarSchema$Distribution_Channel_Name <- factor(StarSchema$Distribution_Channel_Name)
 ```
 
-```{r}
+```{r, cache=T}
 table(StarSchema$IS_CATEGORY_MAPPED)/sum(table(StarSchema$IS_CATEGORY_MAPPED))*100
 table(StarSchema$MARKET_LEVEL)/sum(table(StarSchema$MARKET_LEVEL))*100
 table(StarSchema$SOURCE_CODE)/sum(table(StarSchema$SOURCE_CODE))*100
 table(StarSchema$Month)/sum(table(StarSchema$Month))*100
+table(StarSchema$Distribution_ChainDescription)/sum(table(StarSchema$Distribution_ChainDescription))*100
+table(StarSchema$Distribution_Channel_Name)/sum(table(StarSchema$Distribution_Channel_Name))*100
 ```
 
-```{r}
+```{r, cache=T}
 pie(table(StarSchema$IS_CATEGORY_MAPPED))
 pie(table(StarSchema$MARKET_LEVEL))
 pie(table(StarSchema$SOURCE_CODE))
 pie(table(StarSchema$Month))
+pie(table(StarSchema$Distribution_ChainDescription))
+pie(table(StarSchema$Distribution_Channel_Name))
 ```
 
-```
-```{r}
-require(digest)
-dup <- duplicated(lapply(StarSchema, function(x) digest(toupper(x))))
-print(dup)
-StarSchema[,names(StarSchema)[dup]]
-```
-
-
-Make a collection of the unique items in each column:
-```{r}
-dat <- sapply(StarSchema, unique)
-```
-
-Define the character strings that define the market segments observed in the *Market by Brands* sheets:
-```{r}
- # Note trailing spaces
-segments <- c("ANTISEPTIC\ ",
-              "INTIMATE HYGIENE", 
-              "OTHER GYNAECOLOGICAL PREPARATIONS", 
-              "Intimate Hygiene - Mycosis",
-              "Calming and sleeping products",
-              "Skin Repair",
-              "Laxative",
-              "Allergy",
-              "GERD\ ", # Note trailing space
-              "Suncare"
-)
-```
-
-Loop over each market segment and search for it in the collection of unique items collected from the columns:
-```{r}
-results <- lapply(segments, function(segment) { # Loop over all defined segments
-  unlist( # Collect the results
-    # Search for this segment in each column:
-    lapply(dat, grep, pattern = segment, ignore.case = TRUE, value = TRUE)
-  )
-})
-names(results) <- segments
-```
-
-Print the results:
-```{r}
-print(results)
-```
-
-Which segment categories are missing; that is, there is no data available to enable categorisation into the segments that are present in the *Market by Brand* sheet? 
-```{r}
-# Is the segment missing, i.e., we couldn't find any data for it:
-missing <- sapply(results, length) == 0L
-print(missing[missing]) # These are missing
-```
-
-```{r}
-# install.packages("benford.analysis")
-require(benford.analysis)
-bfd.cp <- benford(StarSchema$Sellout_TurnoverBRG[StarSchema$PHARMA_GROUP == "BAYER CC"], discrete = T, number.of.digits = 1) #generates benford object
-bfd.cp #prints
-plot(bfd.cp) #plots
-```
-
-```{r}
-bfd.cp <- benford(StarSchema$Sellout_Units[StarSchema$PHARMA_GROUP == "BAYER CC"], number.of.digits = 1) #generates benford object
-bfd.cp #prints
-plot(bfd.cp) #plots
-```
