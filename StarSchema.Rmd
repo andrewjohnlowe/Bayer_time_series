@@ -1,20 +1,27 @@
 ---
-title: "StarSchema"
+title: "Some crude time series analysis experiments on the Bayer StarSchema data"
 author: "Andrew Lowe"
-date: "8 January 2018"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
 output:
   pdf_document: default
   html_document:
     df_print: paged
 ---
 
+In my free time, outside of office hours, I'm studying time series analysis. It would be fun to see what we can learn from the Bayer data, which is hierarchical time series data. We won't do anything too sophisticated.
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-Read in the data (and drop the numeric data to save RAM):
+We're going to need this stuff:
 ```{r}
-require(readr)
+require(tidyverse)
+```
+
+
+Read in the data:
+```{r}
 # dat <- fread("C:/Work/Projects/Bayer/ws/Tableau/_work/output/StarSchema_CAT_PT_OVR.csv",
 #                     select = c(2, 8, 9, 36, 38, 46, 50, 54, 58, 59, 63, 197), 
 #                     showProgress = T)
@@ -24,6 +31,7 @@ require(readr)
 dat <- read_csv("C:/Work/Projects/Bayer/ws/Tableau/_work/output/GoldenStandardAddressable.csv")
 ```
 
+We need to impose some filtering criteria; this is identical to what is done in the KNIME workflows:
 ```{r}
 include.rows <- with(dat,
                      (SOURCE_CODE == "OTC_PEC") & 
@@ -37,19 +45,11 @@ include.rows <- with(dat,
                        Prescription_Type == "Sans Prescription"
 )
 
-dat <- dat[include.rows,]
+dat <- dat[include.rows,] # Subset the data
 ```
 
+Here we inspect the Sellout_TurnoverBRG figures, aggregated by PHARMA_BRAND, for each month:
 ```{r}
-require(dplyr)
-dat %>% 
-  group_by(PHARMA_BRAND) %>% 
-  count() %>% 
-  head()
-```
-
-```{r}
-require(ggplot2)
 dat %>% 
   arrange(Month) %>% 
   group_by(PHARMA_BRAND, Month) %>% 
@@ -59,6 +59,7 @@ dat %>%
   geom_line()
 ```
 
+Here we look at the Sellout_TurnoverBRG aggregated by PHARMA_GROUP:
 ```{r}
 dat %>% 
   arrange(Month) %>% 
@@ -69,16 +70,9 @@ dat %>%
   geom_line()
 ```
 
-```{r}
-dat %>% 
-  arrange(Month) %>% 
-  group_by(PHARMA_GROUP, Month) %>% 
-  summarise(Total = sum(Sellout_TurnoverBRG)) %>%
-  filter(PHARMA_GROUP == "BAYER CC") %>% 
-  ggplot(aes(x = Month, y = Total, colour = PHARMA_GROUP)) +
-  geom_point() +
-  geom_line()
-```
+Facebook is a very data-driven company, and they recently made available their *Prophet* package for time series analysis and forecasting that is very user-friendly and requires little tweaking or tuning of parameters to get good results. I've not read the paper, so don't ask me how the magic works. It's not using ARIMA models, apparently.
+
+Here we aggregate Sellout_TurnoverBRG by PHARMA_GROUP, as done for the previous plot, but then we select just the Bayer data to model:
 
 ```{r}
 require(prophet)
@@ -86,42 +80,155 @@ dat %>%
   arrange(Month) %>% 
   group_by(PHARMA_GROUP, Month) %>% 
   summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
-  filter(PHARMA_GROUP == "BAYER CC") -> product
+  filter(PHARMA_GROUP == "BAYER CC") -> temp
 
-df <- product[c("Month", "Total")]
+df <- temp[c("Month", "Total")]
 names(df) <- c("ds","y")
 
-m <- prophet(df)
+m <- prophet(df, interval.width = 0.95) # 95% confidence interval
 ```
 
+Here we build a table to contain our future forecast for 12 months in the future:
 ```{r}
 future <- make_future_dataframe(m, periods = 12, freq = "month")
-head(future)
 ```
 
+Here we run the prediction:
 ```{r}
 forecast <- predict(m, future)
-head(forecast)
 ```
 
+Now we plot the original data and confidence interval bands (we chose a 95% confidence interval), also a decomposition of the data into a trend and seasonal components:
 ```{r}
 plot(m, forecast)
 prophet_plot_components(m, forecast)
 ```
+
+Well, that was fun.
+
+Here we try fitting a bunch of ARIMA models to the data; the best model is chosen automatically:
 ```{r}
 require(forecast)
 temp <- ts(df$y, frequency = 12, start = c(2014, 7))
 fit <- auto.arima(temp, trace = TRUE)
 fit
+```
+
+Here we forecast a year into the future:
+```{r}
 arima.forecast <- forecast(fit, h = 12)
+```
+
+Here we plot the forecast with 80% and 95% confidence intervals bands for the predictions:
+```{r}
 plot(arima.forecast)
 arima.forecast
 ```
 
+That looks nice.
+
+How about trying to use the data to *postdict* historical data?
+
+We define a *crystal ball* function that will run prophet, plot the results, and plot held-out test data as red points. We'll partition the data into two parts, data before and after 2017. The data after 2017 will be our test data. How well do the predictions (the blue 95% confidence interval) match the test data (the red points)?
 ```{r}
-acf(df$y)
-pacf(df$y)
+fb.crystal.ball <- function(in.data) {
+  tbl <- in.data[[1]]
+  #print(class(tbl))
+  #print(str(tbl))
+  title <- tbl %>%
+    select(PHARMA_BRAND) %>%
+    group_by(PHARMA_BRAND) %>%
+    summarise() %>%
+    as.character()
+  print(title)
+  
+  df <- tbl[c("Month", "Total")]
+  names(df) <- c("ds","y")
+  in.train <- df$ds < "2017-01-01"
+  df.train <- df[in.train,]
+  df.test <- df[!in.train,]
+  
+  m <- prophet(df.train, interval.width = 0.95) # 95% confidence interval
+  future <- make_future_dataframe(m, periods = sum(!in.train), freq = "month")
+  forecast <- predict(m, future)
+  
+  plot(m, forecast) +
+    geom_point(data = df.test,
+               aes(x = as.POSIXct(ds), y = y),
+               colour = "red") + # The test points will be red
+    ggtitle(title)
+}
 ```
+
+Now we run this function on every PHARMA_BRAND and postdict the data for 2017:
+```{r}
+require(purrr)
+results <- dat %>% arrange(Month) %>% 
+  group_by(PHARMA_BRAND, Month) %>% 
+  summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
+  #filter(PHARMA_BRAND == "BEPANTHEN TOTAL") %>% 
+  do(data = (.)) %>% 
+  split(.$PHARMA_BRAND) %>% lapply(function(x) x$data) %>% 
+  map(~fb.crystal.ball(.))
+print(results)
+```
+
+That was kinda fun. How about using ARIMA models instead of prophet? Here we define a new function for producing ARIMA models:
+```{r}
+arima.crystal.ball <- function(in.data) {
+  tbl <- in.data[[1]]
+  #print(class(tbl))
+  #print(str(tbl))
+  title <- tbl %>%
+    select(PHARMA_BRAND) %>%
+    group_by(PHARMA_BRAND) %>%
+    summarise() %>%
+    as.character()
+  print(title)
+  
+  df <- tbl[c("Month", "Total")]
+  names(df) <- c("ds","y")
+  in.train <- df$ds < "2017-01-01"
+  df.train <- df[in.train,]
+  train.ts <- ts(df.train$y, frequency = 12, start = c(2014, 7))
+  df.test <- df[!in.train,]
+  test.ts <- ts(df.test$y, frequency = 12, start = c(2017, 1))
+  
+  fit <- auto.arima(train.ts, trace = FALSE)
+  arima.forecast <- forecast(fit, h = sum(!in.train))
+  
+  train <- as.data.frame(time(train.ts))
+  names(train) <- "x"
+  train$y <- as.vector(train.ts)
+  
+  test <- as.data.frame(time(test.ts))
+  names(test) <- "x"
+  test$y <- as.vector(test.ts)
+  
+  autoplot(arima.forecast) +
+    ylab("Sellout_TurnoverBRG") +
+    geom_point(data = train, aes(x = x, y = y), colour = "black") +
+    geom_point(data = test, aes(x = x, y = y), colour = "red") +
+    # geom_point(data = df.test,
+    #            aes(x = as.POSIXct(ds), y = y),
+    #            colour = "red") + # The test points will be red
+    ggtitle(title)
+}
+```
+
+We run our new crystal ball function on each of the PHARMA_BRANDS:
+```{r}
+results <- dat %>% arrange(Month) %>% 
+  group_by(PHARMA_BRAND, Month) %>% 
+  summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
+  # filter(PHARMA_BRAND == "BEPANTHEN TOTAL") %>% 
+  do(data = (.)) %>% 
+  split(.$PHARMA_BRAND) %>% lapply(function(x) x$data) %>% 
+  map(~arima.crystal.ball(.))
+print(results)
+```
+
+OK, so it looks like we might be able to do some useful predictive work with the data.
 
 ```{r}
 knitr::knit_exit()
