@@ -3,9 +3,9 @@ title: "StarSchema"
 author: "Andrew Lowe"
 date: "8 January 2018"
 output:
+  pdf_document: default
   html_document:
     df_print: paged
-  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -13,13 +13,120 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 Read in the data (and drop the numeric data to save RAM):
-```{r, cache=T}
-require(data.table)
-
-StarSchema <- fread("C:/Work/Projects/Bayer/ws/Tableau/_work/output/StarSchema_CAT_PT_OVR_1000.csv", 
-                    select = c(2, 46, 54, 58, 59, 197), # Just these columns; we don't need the rest
-                    showProgress = T)
+```{r}
+require(readr)
+# dat <- fread("C:/Work/Projects/Bayer/ws/Tableau/_work/output/StarSchema_CAT_PT_OVR.csv",
+#                     select = c(2, 8, 9, 36, 38, 46, 50, 54, 58, 59, 63, 197), 
+#                     showProgress = T)
 ```
+
+```{r}
+dat <- read_csv("C:/Work/Projects/Bayer/ws/Tableau/_work/output/GoldenStandardAddressable.csv")
+```
+
+```{r}
+include.rows <- with(dat,
+                     (SOURCE_CODE == "OTC_PEC") & 
+                       (MARKET_LEVEL == "TOTAL") & 
+                       (IS_CATEGORY_MAPPED == "YES" | IS_CATEGORY_MAPPED == "Y") & 
+                       (
+                         (Distribution_ChainDescription == "Pharmacies") | 
+                           (Distribution_Channel_Name == "Pharmacies")
+                       ) &
+                       !is.na(Month) &
+                       Prescription_Type == "Sans Prescription"
+)
+
+dat <- dat[include.rows,]
+```
+
+```{r}
+require(dplyr)
+dat %>% 
+  group_by(PHARMA_BRAND) %>% 
+  count() %>% 
+  head()
+```
+
+```{r}
+require(ggplot2)
+dat %>% 
+  arrange(Month) %>% 
+  group_by(PHARMA_BRAND, Month) %>% 
+  summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
+  ggplot(aes(x = Month, y = Total, colour = PHARMA_BRAND)) +
+  geom_point() +
+  geom_line()
+```
+
+```{r}
+dat %>% 
+  arrange(Month) %>% 
+  group_by(PHARMA_GROUP, Month) %>% 
+  summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
+  ggplot(aes(x = Month, y = Total, colour = PHARMA_GROUP)) +
+  geom_point() +
+  geom_line()
+```
+
+```{r}
+dat %>% 
+  arrange(Month) %>% 
+  group_by(PHARMA_GROUP, Month) %>% 
+  summarise(Total = sum(Sellout_TurnoverBRG)) %>%
+  filter(PHARMA_GROUP == "BAYER CC") %>% 
+  ggplot(aes(x = Month, y = Total, colour = PHARMA_GROUP)) +
+  geom_point() +
+  geom_line()
+```
+
+```{r}
+require(prophet)
+dat %>% 
+  arrange(Month) %>% 
+  group_by(PHARMA_GROUP, Month) %>% 
+  summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
+  filter(PHARMA_GROUP == "BAYER CC") -> product
+
+df <- product[c("Month", "Total")]
+names(df) <- c("ds","y")
+
+m <- prophet(df)
+```
+
+```{r}
+future <- make_future_dataframe(m, periods = 12, freq = "month")
+head(future)
+```
+
+```{r}
+forecast <- predict(m, future)
+head(forecast)
+```
+
+```{r}
+plot(m, forecast)
+prophet_plot_components(m, forecast)
+```
+```{r}
+require(forecast)
+temp <- ts(df$y, frequency = 12, start = c(2014, 7))
+fit <- auto.arima(temp, trace = TRUE)
+fit
+arima.forecast <- forecast(fit, h = 12)
+plot(arima.forecast)
+arima.forecast
+```
+
+```{r}
+acf(df$y)
+pacf(df$y)
+```
+
+```{r}
+knitr::knit_exit()
+```
+
 
 ```{r, cache=T}
 StarSchema$IS_CATEGORY_MAPPED <- factor(StarSchema$IS_CATEGORY_MAPPED)
