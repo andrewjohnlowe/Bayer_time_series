@@ -8,9 +8,11 @@ output:
     df_print: paged
 ---
 
-In my free time, outside of office hours, I'm studying time series analysis. It would be fun to see what we can learn from the Bayer data, which is hierarchical time series data. We won't do anything too sophisticated.
+## Introduction
 
-**Before anyone starts freaking out, I did this while waiting for KNIME workflows to finish executing. They take a while to run, and this seemed to be a reasonable use of my time, given that my next project will probably involve a ton of time series analysis. So there was no impact on my regular duties.**
+In my free time, outside of office hours, I'm studying time series analysis. It would be fun to see what we can learn from the Bayer data, which is hierarchical time series data. We won't do anything too sophisticated at this stage, and we probably don't have enough data points anyway. All of this was developed while waiting for my KNIME workflows to finish running over the full 10 GB data (a couple of hours per workflow), so there was ample time to develop and document what follows. 
+
+## Preparation
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -21,15 +23,7 @@ We're going to need this stuff:
 require(tidyverse)
 ```
 
-
-Read in the data -- we don't have enough RAM on this machine to read in the whole StarSchema data, so we'll just load the Golden Standard data, which will be enough to get a flavour of what might be possible:
-```{r}
-# require(data.table)
-# dat <- fread("C:/Work/Projects/Bayer/ws/Tableau/_work/output/StarSchema_CAT_PT_OVR_1000.csv",
-#                     select = c(2, 8, 9, 36, 38, 46, 50, 54, 58, 59, 63, 197),
-#                     showProgress = T)
-# names(dat)
-```
+Read in the data -- we don't have enough RAM on this machine to read in the whole "StarSchema" data, so we'll just load the "Golden Standard" data, which is a subset of the full data and will be enough to get a flavour of what might be possible:
 
 ```{r message = FALSE}
 dat <- read_csv("C:/Work/Projects/Bayer/ws/Tableau/_work/output/GoldenStandardAddressable.csv")
@@ -37,19 +31,29 @@ dat <- read_csv("C:/Work/Projects/Bayer/ws/Tableau/_work/output/GoldenStandardAd
 
 We need to impose some filtering criteria; this is identical to what is done in the KNIME workflows:
 ```{r}
+# We're only going to consider the SKUs for which we have information on how to
+# categorise them, and only pharmacy sales, ann we'll consider both sales with
+# and without prescription:
 include.rows <- with(dat,
-                     (SOURCE_CODE == "OTC_PEC") & 
+                     (SOURCE_CODE == "OTC_PEC") & # Over The Counter sales
                        (MARKET_LEVEL == "TOTAL") & 
-                       (IS_CATEGORY_MAPPED == "YES" | IS_CATEGORY_MAPPED == "Y") & 
+                       (IS_CATEGORY_MAPPED == "YES" | IS_CATEGORY_MAPPED == "Y") &
                        (
                          (Distribution_ChainDescription == "Pharmacies") | 
                            (Distribution_Channel_Name == "Pharmacies")
                        ) &
-                       !is.na(Month) &
-                       Prescription_Type == "Sans Prescription"
+                       !is.na(Month)
 )
 
 dat <- dat[include.rows,] # Subset the data
+```
+
+## Brief data exploration
+
+How many data points do we have, and what's the reporting period?
+```{r}
+length(unique(dat$Month))
+range(dat$Month)
 ```
 
 Here we inspect the Sellout_TurnoverBRG figures, aggregated by PHARMA_BRAND, for each month:
@@ -63,7 +67,7 @@ dat %>%
   geom_line()
 ```
 
-Here we look at the Sellout_TurnoverBRG aggregated by PHARMA_GROUP:
+Here we look at the Sellout_TurnoverBRG aggregated by PHARMA_GROUP (there's only two in the Golden Standard data):
 ```{r}
 dat %>% 
   arrange(Month) %>% 
@@ -74,7 +78,9 @@ dat %>%
   geom_line()
 ```
 
-Facebook is a very data-driven company, and they recently made available their *Prophet* package for time series analysis and forecasting that is very user-friendly and requires little tweaking or tuning of parameters to get good results. I've not read the paper, so don't ask me how the magic works. It's not using ARIMA models, apparently.
+## Forecasting with Prophet
+
+Facebook is a very data-driven company. They recently made available their *Prophet* package for time series analysis and forecasting that is very user-friendly and requires little tweaking or tuning of parameters to get good results. I've not read the paper yet, so don't ask me how the magic works.
 
 Here we aggregate Sellout_TurnoverBRG by PHARMA_GROUP, as done for the previous plot, but then we select just the Bayer data to model:
 
@@ -86,10 +92,12 @@ dat %>%
   summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
   filter(PHARMA_GROUP == "BAYER CC") -> temp
 
-df <- temp[c("Month", "Total")]
-names(df) <- c("ds","y")
+df <- temp[c("Month", "Total")] # We only want these columns
+names(df) <- c("ds","y") # Prepare the data for prophet
+
 
 m <- prophet(df, interval.width = 0.95) # 95% confidence interval
+# Prophet now runs and outputs some information...
 ```
 
 Here we build a table to contain our future forecast for 12 months in the future:
@@ -97,12 +105,12 @@ Here we build a table to contain our future forecast for 12 months in the future
 future <- make_future_dataframe(m, periods = 12, freq = "month")
 ```
 
-Here we run the prediction:
+Here we run the prediction for the future:
 ```{r}
 forecast <- predict(m, future)
 ```
 
-Now we plot the original data and confidence interval bands (we chose a 95% confidence interval), also a decomposition of the data into a trend and seasonal components:
+Now we plot the original data and confidence interval bands (we chose a 95% confidence interval), also a decomposition of the data into the trend and seasonal components:
 ```{r}
 plot(m, forecast)
 prophet_plot_components(m, forecast)
@@ -110,12 +118,14 @@ prophet_plot_components(m, forecast)
 
 Well, that was fun.
 
+## Forecasting with ARIMA
+
 Here we try fitting a bunch of ARIMA models to the data; the best model is chosen automatically:
 ```{r}
 require(forecast)
 temp <- ts(df$y, frequency = 12, start = c(2014, 7))
 fit <- auto.arima(temp, trace = TRUE)
-fit
+summary(fit)
 ```
 
 Here we forecast a year into the future:
@@ -126,36 +136,40 @@ arima.forecast <- forecast(fit, h = 12)
 Here we plot the forecast with 80% and 95% confidence intervals bands for the predictions:
 ```{r}
 plot(arima.forecast)
-arima.forecast
+arima.forecast # This will print the numeric values for the forecast
 ```
 
 That looks nice.
 
-How about trying to use the data to *postdict* historical data?
+## Model validation
+
+How about trying to use the data to *postdict* historical data? We'd like to have confidence that the predictions for past data match what actually happened.
 
 We define a *crystal ball* function that will run prophet, plot the results, and plot held-out test data as red points. We'll partition the data into two parts, data before and after 2017. The data after 2017 will be our test data. How well do the predictions (the blue 95% confidence interval) match the test data (the red points)?
 ```{r}
 fb.crystal.ball <- function(in.data) {
   tbl <- in.data[[1]]
-  #print(class(tbl))
-  #print(str(tbl))
+  
+  # Grab the brand name to use a the plot title:
   title <- tbl %>%
     select(PHARMA_BRAND) %>%
     group_by(PHARMA_BRAND) %>%
     summarise() %>%
     as.character()
-  print(title)
   
+  # Prepare and partition the data into test and train datasets:
   df <- tbl[c("Month", "Total")]
   names(df) <- c("ds","y")
   in.train <- df$ds < "2017-01-01"
   df.train <- df[in.train,]
   df.test <- df[!in.train,]
   
+  # Forecast:
   m <- prophet(df.train, interval.width = 0.95) # 95% confidence interval
   future <- make_future_dataframe(m, periods = sum(!in.train), freq = "month")
   forecast <- predict(m, future)
   
+  # Make a nice plot:
   plot(m, forecast) +
     geom_point(data = df.test,
                aes(x = as.POSIXct(ds), y = y),
@@ -170,26 +184,29 @@ require(purrr)
 results <- dat %>% arrange(Month) %>% 
   group_by(PHARMA_BRAND, Month) %>% 
   summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
-  #filter(PHARMA_BRAND == "BEPANTHEN TOTAL") %>% 
+  #filter(PHARMA_BRAND == "BEPANTHEN TOTAL") %>% # Uncomment for testing
   do(data = (.)) %>% 
-  split(.$PHARMA_BRAND) %>% lapply(function(x) x$data) %>% 
+  split(.$PHARMA_BRAND) %>% 
+  lapply(function(x) x$data) %>% 
   map(~fb.crystal.ball(.))
 print(results)
 ```
 
-That was kinda fun. How about using ARIMA models instead of prophet? Here we define a new function for producing ARIMA models:
+That was kinda fun. 
+
+How about using ARIMA models instead of prophet? Here we define a new function for producing ARIMA models:
 ```{r}
 arima.crystal.ball <- function(in.data) {
   tbl <- in.data[[1]]
-  #print(class(tbl))
-  #print(str(tbl))
+
+  # Grab the brand name to use a the plot title:
   title <- tbl %>%
     select(PHARMA_BRAND) %>%
     group_by(PHARMA_BRAND) %>%
     summarise() %>%
     as.character()
-  print(title)
   
+  # Prepare and partition the data into test and train datasets:
   df <- tbl[c("Month", "Total")]
   names(df) <- c("ds","y")
   in.train <- df$ds < "2017-01-01"
@@ -198,9 +215,11 @@ arima.crystal.ball <- function(in.data) {
   df.test <- df[!in.train,]
   test.ts <- ts(df.test$y, frequency = 12, start = c(2017, 1))
   
+  # Forecast:
   fit <- auto.arima(train.ts, trace = FALSE)
   arima.forecast <- forecast(fit, h = sum(!in.train))
   
+  # Grab the data points to add to the plot:
   train <- as.data.frame(time(train.ts))
   names(train) <- "x"
   train$y <- as.vector(train.ts)
@@ -213,9 +232,6 @@ arima.crystal.ball <- function(in.data) {
     ylab("Sellout_TurnoverBRG") +
     geom_point(data = train, aes(x = x, y = y), colour = "black") +
     geom_point(data = test, aes(x = x, y = y), colour = "red") +
-    # geom_point(data = df.test,
-    #            aes(x = as.POSIXct(ds), y = y),
-    #            colour = "red") + # The test points will be red
     ggtitle(title)
 }
 ```
@@ -225,12 +241,13 @@ We run our new crystal ball function on each of the PHARMA_BRANDS:
 results <- dat %>% arrange(Month) %>% 
   group_by(PHARMA_BRAND, Month) %>% 
   summarise(Total = sum(Sellout_TurnoverBRG)) %>% 
-  # filter(PHARMA_BRAND == "BEPANTHEN TOTAL") %>% 
+  # filter(PHARMA_BRAND == "BEPANTHEN TOTAL") %>% # Uncomment for testing
   do(data = (.)) %>% 
-  split(.$PHARMA_BRAND) %>% lapply(function(x) x$data) %>% 
+  split(.$PHARMA_BRAND) %>% 
+  lapply(function(x) x$data) %>% 
   map(~arima.crystal.ball(.))
 print(results)
 ```
 
-OK, so it looks like we might be able to do some useful predictive work with the data.
+OK, so it looks like we might be able to do some useful predictive work with the data. Performance seems to be variable. Some results seem quite good, which is encouraging, given that we didn't do any tuning --- we just supplied the data and hoped for the best. We could probably do better if we had more data and spent more time refining models. Not bad for a few hours work!
 
